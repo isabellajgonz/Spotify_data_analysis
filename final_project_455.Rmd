@@ -1,0 +1,248 @@
+---
+title: "Final Project"
+author: "Isabella Gonzalez"
+date: "2023-08-01"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(readr)
+library(corrplot)
+library(regclass)
+library(caret)
+library(knitr)
+#library(kableExtra)
+library(stargazer)
+
+playlist_table<-read.csv("C:\\Users\\Bella\\Documents\\STOR455\\spotifyplaylist.csv")
+playlist_nogenre <- subset(playlist_table, select = -c(top.genre, artist, title, added,year))
+```
+
+```{r, results = FALSE, echo = FALSE}
+set.seed(4330)
+rows = sample(nrow(playlist_nogenre))
+playlist_shuffle = playlist_nogenre[rows,]
+playlistTrain = playlist_shuffle[1:366,]
+playlistTest = playlist_shuffle[367:458,]
+playlist_mlr<-lm(pop~., data = playlistTrain)
+playlist_mlr_summary<-summary(playlist_mlr)
+
+playlist_mlr3<-lm(pop^3~., data = playlistTrain)
+playlist_mlr3_summary<-summary(playlist_mlr3)
+
+MSE <-(summary(playlist_mlr3)$sigma)^2
+step(playlist_mlr3, scale = MSE, direction = "backward")
+pop_mlr_reduced <-lm(pop^3 ~ dB + acous + spch, data = playlistTrain)
+pop_mlr_reduced_summary<-summary(pop_mlr_reduced)
+
+vif_values<-VIF(pop_mlr_reduced)
+poppredict = predict(pop_mlr_reduced, newdata = playlistTest)
+poppredict = poppredict^(1/3)
+holdoutresid = playlistTest$pop - poppredict 
+holdoutresid
+sqrt(mean(holdoutresid^2))
+```
+
+## Introduction
+
+  If you take a glance at the current Billboard Top 100, you'll notice a diverse array of songs dominating the charts^[https://www.billboard.com/charts/hot-100/].At the time of writing this, holding the number 1 spot is a track from a Korean boy band member, followed by a few contemporary country songs, and then a song by a Nigerian and Mexican-American artist. At first glance, these songs may appear to have nothing in common, but is that truly the case? Are there certain attributes of songs that make them more likely to be popular? Exploratory data analysis has shown that the average song duration has decreased in the present day^[https://ucladatares.medium.com/spotify-trends-analysis-129c8a31cf04], which raises an immediate question: are shorter songs more popular? For aspiring artists or record company executives, identifying trends in song popularity could unlock a world of fandom and profits.
+   
+  Music is more accessible than ever with streaming services like Spotify. Spotify also offers a free web API that allows you to pull audio features of your favorite tracks. Danceability, BPM, energy, acousticness, and, most importantly, popularity are just some of the attributes that Spotify assigns and evaluates for every song. Utilizing this data could provide valuable insights into what factors contribute to a song's popularity and help guide aspiring artists and record companies in creating successful tracks. My ultimate question is this: can we predict a song's popularity based on its attributes? Trends change, so my focus is on songs from the past five years.
+
+
+# Data
+
+  For this project, I created my dataset using Spotify and a website^[http://organizeyourmusic.playlistmachinery.com/#] that implements their API, allowing me to access the song features. It is called organizeyourmusic.com. To compile the dataset, I added the Billboard Year-End Hot 100 songs from the past five years to a Spotify playlist and inputted it into the Organize Your Music website. The website then generated a table with the songs and their corresponding Spotify features, which I have used as my dataset. It is important to note a few aspects of how this dataset was created. Spotify combines the streams for the clean and explicit versions of songs, as well as tracks initially released as singles and later added to albums. For consistency, I included the explicit labeled versions of each song and the album version if applicable. Additionally, remixes are counted separately. One issue I faced was with the song 'Beat Box' by SpotemGottem, where two remixes were combined for the Billboard chart position, while Spotify counted them separately. In my analysis, I decided to include both individual songs since they were separately popular. Another consideration was songs ending up on the Year-End chart for multiple years, which I treated as duplicate observations. To manage this issue, I removed the extra observations. At the end of the process, I had a total of 458 observations and 15 variables.
+```{r, echo = FALSE, results= "asis"}
+head(playlist_table)#%>%
+  #kbl() %>%
+  #kable_classic(full_width = F, html_font = "sans-serif")
+```  
+  
+
+My data initially had 15 variables: **title**, **artist**, **top.genre**, **year**, **added**, **bpm**, **nrgy**, **dnce**, **dB**, **live**, **val**, **dur**, **acous**, **spch**, and **pop**. **Title** represents the song title, **artist** indicates the artist or performer, and **top.genre** denotes the main genre of the song as assigned by Spotify. **Year** indicates the year the song was released, and **added** represents the date when the song was added to the Spotify playlist. During my initial data cleaning, I removed these variables as they were not relevant for my analysis of a song's attributes influencing popularity. While I considered keeping **top.genre** in the dataset, it had 86 unique values, making it difficult for interpretation and computation. 
+
+```{r, warning = FALSE, echo = FALSE, results = FALSE}
+playlist_nogenre <- subset(playlist_table, select = -c(top.genre, artist, title, added,year))
+length(unique(playlist_table$top.genre))
+```
+
+My cleaned table looked like this:
+
+
+```{r, echo = FALSE, results = "asis"}
+head(playlist_nogenre)#%>%
+  #kbl() %>%
+  #kable_classic(full_width = F, html_font = "sans-serif")
+```
+
+The rest of the variables represent the following according to the Spotify API documentation^[https://developer.spotify.com/documentation/web-api/reference/get-several-audio-features]: 
+**bpm** - beats per minute, or the speed of the song
+**nrgy** - energy, a measure from 0 to 100 and represents a perceptual measure of intensity and activity
+**dnce**- danceability, a measure from 0 to 100 describing how suitable a track is for dancing based on a combination of musical elements including tempo, rhythm stability, beat strength, and overall regularity
+**dB** - the loudness of a track in decibels, values typically range between -60 and 0 decibels. 
+**live** - detects the presence of an audience in the recording, higher values indicate the track was performed live, ranges 0 to 100
+**val** - valence, measure from 0 to 100 conveying the "musical positiveness" of a track. The higher the value, the more positive the song sounds
+**dur** - duration, length of the song in seconds
+**acous** - acousticness, a confidence measure 0 to 100 of how acoustic a song is. A high value represent higher confidence a track is acoustic
+**spch** -  speechiness, detects the presence of spoken word in a song. Measure from 0 to 100, the higher the value the more spoken word
+**pop** - is popularity score, a measure from 0 1o 100 given to a song based on the number of streams and how recent those streams were
+
+
+# Methods
+
+  To begin my analysis, I set my seed, shuffled the rows of my dataset, then partitioned the data approximately 80-20. I ended with 366 observations in my training set, and 92 in my test set. I did this to reduce bias in my modeling. The first step I took was to create a full multiple linear regression model. I regressed **pop** onto all variables in the data set.
+
+$$\hat{pop} = {\hat{\beta_0}} + {\hat{\beta_1}}bpm + {\hat{\beta_2}nrgy} + {\hat{\beta_3}dnce} + {\hat{\beta_4}dB} +{\hat{\beta_5}live} + {\hat{\beta_6}val} + {\hat{\beta_7}dur} + {\hat{\beta_8}acous} +{\hat{\beta_9}spch}$$
+
+I chose the multiple regression model because it would be more suitable for predicting the variable **pop** based on several predictors. I believed that relying on a single explanatory variable would not adequately capture the relationship between **pop** and its potential predictors.
+
+To ensure the appropriateness of the multiple regression model, I examined the diagnostics of my full model. Multiple regression has four key assumptions that need to be met for the model to be appropriate: linearity, normality of the residuals, constant variance (homoscedasticity), and independence of observation
+
+After examining the diagnostics, it appears that the assumptions for multiple linear regression were mostly met (see appendix model 1).
+
+There were, however, some concerns about the normality of the residuals. The body of the plot appeared roughly diagonal, indicating that the residuals were approximately normal around the center, but the tails deviated from the diagonal line.
+
+Despite the concern about normality, I decided to proceed with the model, acknowledging that potential improvements could be made through data transformation to address the deviation in the tails.
+
+I moved forward with model transformation. For my dataset, I chose to cube the response variable **pop** while retaining all variables. I chose this transformation because I had negative and zero values in my data, preventing the usage of typical transformations such as logarithmic or square root, and needed to address the normality of the residuals. After checking the diagnostics plots again, I felt I could move forward with this transformation. My concerns for normality were addressed with minimal adjustments to the other plots (see appendix model 2).
+
+I employed backward selection via the Cp statistic for model selection. Starting with the full transformed model, I used the `step()` function to iteratively eliminate one predictor at a time based on the Cp statistic's evaluation. This method strikes a balance between model fit and complexity, considering the pool of other potential predictors for each subset model. Considering the initial model's complexity and poor fit, I opted for this approach to identify a simpler yet effective model. The Cp statistic's selection process allowed me to adjust the model and choose the most relevant predictors, ensuring a more interpretable and robust final regression model.For a *m* parameter subset of the original *p* parameter full model with *n* observations 
+
+$$C_p = \frac{SSE_m}{MSE_p}+2(m+1)-n$$
+
+After performing backward selection, I derived the final multiple regression model and checked to see my assumptions held (see appendix model 3).To ensure its validity, I initially assessed potential collinearity issues by examining the variance inflation factors (VIF) values using the `VIF()` function. Variance inflation factors are the factor by which the variance of the estimate $\hat{\beta}$ is "inflated" by adding the covariate $x_i$ to the model. A value between 1 and 5 indicates moderate collinearity, and a value greater than 5 indicates severe collinearity. Afterwards, I utilized this model to make predictions on the test data, which were then transformed to their original scale. Next, I computed the differences between the observed and predicted values. Lastly, I evaluated the model's performance by calculating the root mean square error (RMSE), a value that represents the standard deviation of prediction errors. I used the RMSE in conjunction with my adjusted $R^2$ value to ultimately assess the effectiveness of my final model. The formula I used was $$RMSE = \sqrt{\frac{1}{n}\sum_{i=1}^n(y_i-\hat{y}_i)^2}$$
+
+I chose this method over other cross-validation approaches due to the challenge of interpreting results arising from cubing my response variable. 
+
+
+# Results
+
+After examining the results of my initial multiple linear regression model, I found that most variables appeared to be insignificant, and the adjusted $R^2$ value was 0.04787. This adjusted $R^2$ value indicates that approximately 4% of the variability in the popularity score can be explained by the covariates included in the model. I initially included all variables in my model, and only **acous** and **spch** had some level of significance at the 0.05 level. This meant for only those two variables could I reject the null hypothesis that there is not a relationship between **pop** and those covariates. 
+
+```{r, echo = FALSE, warning = FALSE}
+stargazer(playlist_mlr, type = "text",single.row = TRUE)
+
+```
+The left hand column represents our $\hat{\beta}$ estimates, while the right is our standard error. Any significant values are noted with stars.
+
+
+Considering the diagnostic plots for this model and acknowledging the issues related to the normality of the residuals, I decided to address these concerns by transforming the model. Specifically, I applied a cube transformation to the response variable **pop**. I then performed a regression, regressing the cubed **pop** onto all other variables in the model. However, even after the transformation, the adjusted $R^2$ value remained relatively unchanged at 0.04105. The summary for this plot indicated that only one predictor, **acous**, was significant in the model. Significance means for all variables except **acous**, we fail to reject the null hypothesis that there is no relationship between the response and explanatory variables. 
+
+```{r, echo = FALSE}
+stargazer(playlist_mlr3,type = "text",single.row = TRUE)
+```
+
+
+After applying backward selection via the Cp statistic, the resulting model retained the covariates **dB**, **acous**, and **spch**. I used these results to create my final regression model, regressing **pop** onto **db**, **acous**, and **spch**. Upon running a summary, the model's performance did not appear to be satisfactory. The adjusted $R^2$ value remained around the same value as before, at 0.04596, indicating that only 4% of the variability in **pop** could be explained by my model. In this model, **acous** and **dB** were significant at 0.001 level. For these two variables we could consider their relationship with **pop** to be statistically significant. 
+
+```{r, echo = FALSE}
+stargazer(pop_mlr_reduced,type = "text",single.row = TRUE)
+```
+
+Recognizing potential issues in the model, I considered collinearity as a possible cause, as backward selection may not account for it during the selection process. To investigate, I tested for collinearity using the variance inflation factors (VIF). The results showed that collinearity was not a significant concern, with each variable having a VIF factor under 2, indicating low to moderate collinearity.
+
+```{r, echo = FALSE}
+vif_values
+```
+
+Throughout my model selection process, I became increasingly skeptical about the ability to adequately predict **pop** based on the given variables in the dataset. The adjusted $R^2$ value consistently remained at a low level, and only a few predictors showed statistical significance. To gain further insights into the model's performance, I employed it to predict the values of **pop** in the test data. After detransforming the predictions and calculating the residuals, I computed a root mean square error (RMSE) of 7.217619. This RMSE value indicates that, on average, my model's prediction errors were about 7 units, which might seem relatively small for a response variable ranging from 0 to 100.
+
+```{r,results = FALSE}
+poppredict = predict(pop_mlr_reduced, newdata = playlistTest)
+poppredict = poppredict^(1/3)
+holdoutresid = playlistTest$pop - poppredict 
+rmse = sqrt(mean(holdoutresid^2))
+```
+
+It is important to acknowledge that the calculated rmse value was based on a single iteration of the data partitioning. As a result, if predictions were performed on a differently partitioned dataset, the RMSE value could vary, potentially leading to larger or smaller values. 
+
+Upon examining the data, I noticed a notable disparity in the popularity scores of certain songs. For example, Don't Start Now by Dua Lipa had 2,310,941,962 streams on Spotify at the time of writing, while If I Can't Have You by Shawn Mendes had 939,862,239 streams. Although Spotify's popularity score is not solely determined by the number of streams, it is crucial to put the 7-point difference into perspective, as it can translate to a billion difference in streams. This highlights the importance of considering the real-world impact of seemingly small differences in the model's predictions.
+
+
+# Conclusion
+
+In this project, I set out to explore the factors influencing song popularity and assess the predictability of a song's popularity based on its attributes. By leveraging Spotify's audio feature data and Billboard's Year-End Hot 100 chart data from the past five years, I conducted multiple regression modeling and statistical tests to uncover insights into the relationship between song attributes and popularity.
+
+My results, unfortunately, did not yield promising outcomes. The model exhibited a questionable RMSE and a low adjusted R^2 value, indicating that it struggled to make accurate predictions and failed to explain the variability in 'pop'. This underwhelming performance may be attributed to several factors, such as the appropriateness of the applied transformation or the model's retained complexity.
+
+I believe the dataset might not have been sufficient enough to capture the intricate patterns driving song popularity. Several issues come to light, including the method Spotify uses to calculate popularity scores. The variability in a song's score over time, based on the number of streams and their recency, can lead to fluctuations in popularity scores. For instance, a song with a popularity score of 95 today might witness a decline in score within a few months. This poses challenges in accurately capturing the true underlying popularity of songs.
+
+Moreover, some variables, like 'valence', a subjective trait which describes how positive a track sounds, may not have undergone rigorous calculations, potentially affecting the overall model performance.
+
+Ultimately, the dataset didn't include other important factors that could influence a song's popularity, like an artist's previous "hit" song, record label association, or the specific words used in the lyrics. These missing elements may have significant impacts on how popular a song becomes.
+
+Patterns found in one genre may not be found in another, influencing the predictability of popularity for every song. I imagine danceability is more important to a dance pop song’s popularity than contemporary country songs. 
+
+Predicting song popularity is a complex task that cannot be fully accomplished solely through Spotify’s song attribute data. The music industry is constantly evolving, and the rise of social media has further added to the unpredictability of a song exploding in popularity. As a result, a comprehensive approach, considering a wider array of factors, is essential to gain deeper insights into the dynamics of song popularity, helping artists and record companies alike.
+
+
+
+
+# Appendix
+
+## Model 1
+```{r}
+playlist_mlr_plot<-plot(playlist_mlr)
+```
+The residuals vs leverage plots is sufficient to meet the assumption for linearity, the line is strongly horizontal. The scale-location plot looks pretty good as well, it is not perfectly horizontal but it is enough to say homoscedasticity is met. Independent observations were a part of the dataset design. My only concern here is the tails of the Q-Q plot for normality of the residuals. There are deviations on either end, but it isn't drastic enough to consider the assumption is not met considering the other plots. Tenatively, normality of residuals is met. 
+
+## Model 2
+```{r}
+playlist_mlr3_plot<-plot(playlist_mlr3)
+```
+The plots here are enough to say the multiple linear regression assumptions are met. The residuals vs fitted plot shows a largely horizontal line, meeting our assumption for linearity. My concerns about the tails in the Q-Q plot are gone, and I can say that the normality of residuals assumptions is met. The scale-location plot for homoscedasticity changed a little bit, but not enough for the assumption to longer be met, the line still mostly horizontal. Again, independent observations are assumed.  
+
+## Model 3
+```{r}
+pop_mlr_reduced_plot<-plot(pop_mlr_reduced)
+```
+
+Again, the plots here are enough to say the multiple linear regression assumptions are met. They are very similar to the previous model. The residuals vs fitted plot shows a largely horizontal line, meeting our assumption for linearity. The Q-Q plot shows a strong diagonal line with little deviation. Here, I can say the normality of residuals assumptions is met. The scale-location plot for homoscedasticity shows a mostly horizontal line, enough to say the assumption has been met. Again, independent observations are assumed.
+
+
+
+
+```{r, results = FALSE, echo = FALSE}
+#i messed around with this too but it would not fit in the paper, and it was less methodical than the mlr
+
+playlist_nogenre_binary=playlist_nogenre
+playlist_nogenre_binary$pop<-ifelse(playlist_nogenre$pop >= 80, 1, 0)
+head(playlist_nogenre_binary)
+
+set.seed(6829)
+rows2 = sample(nrow(playlist_nogenre_binary))
+playlistnb_shuffle = playlist_nogenre_binary[rows,]
+nbplaylistTrain = playlistnb_shuffle[1:366,]
+nbplaylistTest = playlistnb_shuffle[367:458,]
+
+
+multiple_logistic = glm(pop~., family = binomial, data = nbplaylistTrain)
+summary(multiple_logistic)
+
+VIF(multiple_logistic)
+
+library(bestglm)
+playlist_glm<-bestglm(nbplaylistTrain, family= binomial, IC = "AIC")
+playlist_glm$BestModels
+
+playlist_glm_mod<-glm(pop~dB+acous, data = nbplaylistTrain)
+summary(playlist_glm_mod)
+
+probability= predict(playlist_glm_mod,newdata = nbplaylistTest, type = "response")
+
+predict_classes <-ifelse(probability >= 80, "1", "0")
+
+mean(predict_classes == nbplaylistTest$pop)
+
+```
+
+
+
+
+
+
